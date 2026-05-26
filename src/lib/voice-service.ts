@@ -30,6 +30,24 @@ function authHeaders(): HeadersInit | undefined {
   return token ? { Authorization: `Bearer ${token}` } : undefined;
 }
 
+function serviceUnavailableMessage() {
+  return [
+    `Saarthi voice worker is not reachable at ${serviceBaseUrl()}.`,
+    "Start it with `npm run voice:dev` after installing the Python worker dependencies.",
+  ].join(" ");
+}
+
+async function fetchVoiceService(input: string, init: RequestInit) {
+  try {
+    return await fetch(input, init);
+  } catch (error) {
+    if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+      throw new Error("Saarthi voice worker timed out. Try again with a shorter question.");
+    }
+    throw new Error(serviceUnavailableMessage());
+  }
+}
+
 async function readJsonError(response: Response) {
   const data = await response.clone().json().catch(() => null);
   if (data && typeof data.detail === "string") {
@@ -46,7 +64,7 @@ export async function transcribeWithVoiceService(file: File): Promise<SpeechToTe
   const form = new FormData();
   form.append("audio", file, file.name || "speech.webm");
 
-  const response = await fetch(`${serviceBaseUrl()}/asr`, {
+  const response = await fetchVoiceService(`${serviceBaseUrl()}/asr`, {
     method: "POST",
     headers: authHeaders(),
     body: form,
@@ -65,7 +83,7 @@ export async function transcribeWithVoiceService(file: File): Promise<SpeechToTe
 }
 
 export async function synthesizeWithVoiceService(text: string): Promise<TextToSpeechResult> {
-  const response = await fetch(`${serviceBaseUrl()}/tts`, {
+  const response = await fetchVoiceService(`${serviceBaseUrl()}/tts`, {
     method: "POST",
     headers: {
       ...authHeaders(),

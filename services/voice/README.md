@@ -9,8 +9,9 @@ This FastAPI service keeps Saarthi's speech stack local and open source:
 Run it as one long-lived process. Do not run multiple Uvicorn workers on a small CPU box because each worker loads its own ASR model.
 
 ```bash
-python -m venv .venv-voice
+python3.11 -m venv .venv-voice
 source .venv-voice/bin/activate
+python -m pip install --upgrade pip
 pip install -r services/voice/requirements.txt
 python scripts/download-piper-voice.py
 uvicorn services.voice.app:app --host 0.0.0.0 --port 8010 --workers 1

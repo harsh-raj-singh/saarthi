@@ -85,8 +85,9 @@ npm install
 Install the voice worker dependencies:
 
 ```bash
-python -m venv .venv-voice
+python3.11 -m venv .venv-voice
 source .venv-voice/bin/activate
+python -m pip install --upgrade pip
 pip install -r services/voice/requirements.txt
 ```
 
@@ -105,7 +106,7 @@ python scripts/download-piper-voice.py
 Start the voice worker:
 
 ```bash
-uvicorn services.voice.app:app --host 0.0.0.0 --port 8010 --workers 1
+npm run voice:dev
 ```
 
 Start the website in another terminal:
@@ -120,6 +121,8 @@ Open:
 - embed demo: `http://localhost:3000/embed-test`
 - web health: `http://localhost:3000/api/health`
 - voice worker health: `http://localhost:8010/health`
+
+If the widget says the voice worker is not reachable, `http://localhost:8010/health` is the first thing to check. The Next.js app can be healthy while speech still fails if this worker is not running.
 
 ## Docker Compose
 
