@@ -65,6 +65,8 @@ OPENAI_API_KEY=
 OPENAI_MODEL=gpt-5.5-mini
 SAARTHI_ALLOWED_ORIGINS=https://your-domain.com
 VOICE_SERVICE_URL=http://127.0.0.1:8010
+VOICE_SERVICE_ASR_TIMEOUT_MS=600000
+VOICE_SERVICE_TTS_TIMEOUT_MS=120000
 VOICE_SERVICE_AUTH_TOKEN=
 ```
 
@@ -122,7 +124,7 @@ Open:
 - web health: `http://localhost:3000/api/health`
 - voice worker health: `http://localhost:8010/health`
 
-If the widget says the voice worker is not reachable, `http://localhost:8010/health` is the first thing to check. The Next.js app can be healthy while speech still fails if this worker is not running.
+If the widget says the voice worker is not reachable, `http://localhost:8010/health` is the first thing to check. The Next.js app can be healthy while speech still fails if this worker is not running. The worker preloads Parakeet by default; if `asr.status` is `loading`, the 2.47 GB Parakeet model is still downloading or warming up. Later turns should be much faster after `asr.loaded` becomes `true`.
 
 ## Docker Compose
 

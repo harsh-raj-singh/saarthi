@@ -4,6 +4,7 @@ import asyncio
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -32,6 +33,11 @@ SUBPROCESS_TIMEOUT_SECONDS = int(os.getenv("VOICE_SUBPROCESS_TIMEOUT_SECONDS", "
 ASR_CONCURRENCY = int(os.getenv("ASR_CONCURRENCY", "1"))
 CPU_THREADS = int(os.getenv("SAARTHI_CPU_THREADS", "0") or "0")
 VOICE_SERVICE_AUTH_TOKEN = os.getenv("VOICE_SERVICE_AUTH_TOKEN", "").strip()
+VOICE_PRELOAD_ASR = os.getenv("VOICE_PRELOAD_ASR", "true").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+}
 
 app = FastAPI(title="Saarthi Voice Worker", version="0.2.0")
 app.add_middleware(
@@ -44,6 +50,13 @@ app.add_middleware(
 _asr_model: Any | None = None
 _asr_lock = asyncio.Lock()
 _asr_semaphore = asyncio.Semaphore(max(1, ASR_CONCURRENCY))
+_asr_state: dict[str, Any] = {
+    "status": "not_loaded",
+    "started_at": None,
+    "loaded_at": None,
+    "duration_ms": None,
+    "error": None,
+}
 
 
 class TTSRequest(BaseModel):
@@ -54,9 +67,28 @@ def _ms(start: float) -> int:
     return round((time.perf_counter() - start) * 1000)
 
 
-def _check_command(binary: str, label: str) -> None:
-    if shutil.which(binary):
-        return
+@app.on_event("startup")
+async def warm_asr_on_startup() -> None:
+    if VOICE_PRELOAD_ASR:
+        asyncio.create_task(_load_asr_model())
+
+
+def _resolve_command(binary: str) -> str | None:
+    resolved = shutil.which(binary)
+    if resolved:
+        return resolved
+
+    venv_binary = Path(sys.executable).parent / binary
+    if venv_binary.exists():
+        return str(venv_binary)
+
+    return None
+
+
+def _check_command(binary: str, label: str) -> str:
+    resolved = _resolve_command(binary)
+    if resolved:
+        return resolved
     raise HTTPException(
         status_code=503,
         detail=f"{label} is not installed or not on PATH: {binary}",
@@ -90,6 +122,19 @@ def _audio_suffix(filename: str | None, content_type: str | None) -> str:
     return ".webm"
 
 
+def _load_asr_model_sync() -> Any:
+    import torch
+    import nemo.collections.asr as nemo_asr
+
+    if CPU_THREADS > 0:
+        torch.set_num_threads(CPU_THREADS)
+
+    model = nemo_asr.models.ASRModel.from_pretrained(model_name=PARAKEET_MODEL)
+    model.eval()
+    model.to(torch.device("cpu"))
+    return model
+
+
 async def _load_asr_model() -> Any:
     global _asr_model
     if _asr_model is not None:
@@ -99,10 +144,20 @@ async def _load_asr_model() -> Any:
         if _asr_model is not None:
             return _asr_model
 
+        started = time.perf_counter()
+        _asr_state.update(
+            {
+                "status": "loading",
+                "started_at": time.time(),
+                "loaded_at": None,
+                "duration_ms": None,
+                "error": None,
+            }
+        )
         try:
-            import torch
-            import nemo.collections.asr as nemo_asr
+            _asr_model = await asyncio.to_thread(_load_asr_model_sync)
         except Exception as exc:  # pragma: no cover - depends on local model stack
+            _asr_state.update({"status": "error", "error": str(exc)})
             raise HTTPException(
                 status_code=503,
                 detail=(
@@ -111,13 +166,14 @@ async def _load_asr_model() -> Any:
                 ),
             ) from exc
 
-        if CPU_THREADS > 0:
-            torch.set_num_threads(CPU_THREADS)
-
-        model = nemo_asr.models.ASRModel.from_pretrained(model_name=PARAKEET_MODEL)
-        model.eval()
-        model.to(torch.device("cpu"))
-        _asr_model = model
+        _asr_state.update(
+            {
+                "status": "loaded",
+                "loaded_at": time.time(),
+                "duration_ms": _ms(started),
+                "error": None,
+            }
+        )
         return _asr_model
 
 
@@ -138,9 +194,9 @@ def _extract_transcript(result: Any) -> str:
 
 
 async def _run_ffmpeg(input_path: Path, wav_path: Path) -> None:
-    _check_command(FFMPEG_BIN, "ffmpeg")
+    ffmpeg_bin = _check_command(FFMPEG_BIN, "ffmpeg")
     command = [
-        FFMPEG_BIN,
+        ffmpeg_bin,
         "-hide_banner",
         "-loglevel",
         "error",
@@ -180,9 +236,11 @@ async def health() -> dict[str, Any]:
             "model": PARAKEET_MODEL,
             "loaded": _asr_model is not None,
             "device": "cpu",
+            **_asr_state,
         },
         "tts": {
             "engine": "piper",
+            "binary": _resolve_command(PIPER_BIN),
             "model": str(PIPER_MODEL_PATH),
             "model_exists": PIPER_MODEL_PATH.exists(),
             "config_exists": PIPER_CONFIG_PATH.exists(),
@@ -229,7 +287,7 @@ async def tts(request: Request, payload: TTSRequest) -> FileResponse:
     if len(text) > MAX_TTS_CHARS:
         text = text[:MAX_TTS_CHARS].rsplit(" ", 1)[0] or text[:MAX_TTS_CHARS]
 
-    _check_command(PIPER_BIN, "Piper")
+    piper_bin = _check_command(PIPER_BIN, "Piper")
     if not PIPER_MODEL_PATH.exists():
         raise HTTPException(
             status_code=503,
@@ -241,7 +299,7 @@ async def tts(request: Request, payload: TTSRequest) -> FileResponse:
     temp.close()
 
     command = [
-        PIPER_BIN,
+        piper_bin,
         "--model",
         str(PIPER_MODEL_PATH),
         PIPER_OUTPUT_FLAG,

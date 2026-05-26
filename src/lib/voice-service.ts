@@ -1,7 +1,8 @@
 import { getEnv } from "@/lib/env";
 
 const DEFAULT_VOICE_SERVICE_URL = "http://127.0.0.1:8010";
-const DEFAULT_TIMEOUT_MS = 90_000;
+const DEFAULT_ASR_TIMEOUT_MS = 600_000;
+const DEFAULT_TTS_TIMEOUT_MS = 120_000;
 
 export type SpeechToTextResult = {
   text: string;
@@ -20,9 +21,11 @@ function serviceBaseUrl() {
   return (getEnv("VOICE_SERVICE_URL") || DEFAULT_VOICE_SERVICE_URL).replace(/\/$/, "");
 }
 
-function timeoutSignal() {
-  const value = Number(getEnv("VOICE_SERVICE_TIMEOUT_MS") || DEFAULT_TIMEOUT_MS);
-  return AbortSignal.timeout(Number.isFinite(value) ? value : DEFAULT_TIMEOUT_MS);
+function timeoutSignal(name: "ASR" | "TTS") {
+  const defaultValue = name === "ASR" ? DEFAULT_ASR_TIMEOUT_MS : DEFAULT_TTS_TIMEOUT_MS;
+  const specific = getEnv(`VOICE_SERVICE_${name}_TIMEOUT_MS`);
+  const value = Number(specific || getEnv("VOICE_SERVICE_TIMEOUT_MS") || defaultValue);
+  return AbortSignal.timeout(Math.max(Number.isFinite(value) ? value : defaultValue, defaultValue));
 }
 
 function authHeaders(): HeadersInit | undefined {
@@ -37,12 +40,16 @@ function serviceUnavailableMessage() {
   ].join(" ");
 }
 
-async function fetchVoiceService(input: string, init: RequestInit) {
+async function fetchVoiceService(input: string, init: RequestInit, name: "ASR" | "TTS") {
   try {
     return await fetch(input, init);
   } catch (error) {
     if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
-      throw new Error("Saarthi voice worker timed out. Try again with a shorter question.");
+      throw new Error(
+        name === "ASR"
+          ? "Parakeet ASR is still warming up on CPU. Wait for the voice worker health to show ASR loaded, then try again."
+          : "Piper TTS timed out while generating speech. Try a shorter answer.",
+      );
     }
     throw new Error(serviceUnavailableMessage());
   }
@@ -64,12 +71,16 @@ export async function transcribeWithVoiceService(file: File): Promise<SpeechToTe
   const form = new FormData();
   form.append("audio", file, file.name || "speech.webm");
 
-  const response = await fetchVoiceService(`${serviceBaseUrl()}/asr`, {
-    method: "POST",
-    headers: authHeaders(),
-    body: form,
-    signal: timeoutSignal(),
-  });
+  const response = await fetchVoiceService(
+    `${serviceBaseUrl()}/asr`,
+    {
+      method: "POST",
+      headers: authHeaders(),
+      body: form,
+      signal: timeoutSignal("ASR"),
+    },
+    "ASR",
+  );
 
   if (!response.ok) {
     throw new Error(await readJsonError(response));
@@ -83,15 +94,19 @@ export async function transcribeWithVoiceService(file: File): Promise<SpeechToTe
 }
 
 export async function synthesizeWithVoiceService(text: string): Promise<TextToSpeechResult> {
-  const response = await fetchVoiceService(`${serviceBaseUrl()}/tts`, {
-    method: "POST",
-    headers: {
-      ...authHeaders(),
-      "Content-Type": "application/json",
+  const response = await fetchVoiceService(
+    `${serviceBaseUrl()}/tts`,
+    {
+      method: "POST",
+      headers: {
+        ...authHeaders(),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ text }),
+      signal: timeoutSignal("TTS"),
     },
-    body: JSON.stringify({ text }),
-    signal: timeoutSignal(),
-  });
+    "TTS",
+  );
 
   if (!response.ok) {
     throw new Error(await readJsonError(response));

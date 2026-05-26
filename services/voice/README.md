@@ -33,8 +33,11 @@ PIPER_CONFIG_PATH=services/voice/models/en_US-lessac-medium.onnx.json
 VOICE_MAX_AUDIO_BYTES=15728640
 VOICE_SUBPROCESS_TIMEOUT_SECONDS=45
 VOICE_SERVICE_AUTH_TOKEN=
+VOICE_PRELOAD_ASR=true
 ASR_CONCURRENCY=1
 SAARTHI_CPU_THREADS=4
 CUDA_VISIBLE_DEVICES=""
 TOKENIZERS_PARALLELISM=false
 ```
+
+The first Parakeet CPU load can be slow. While it is loading, `/health` stays responsive and reports `asr.status: "loading"`.
