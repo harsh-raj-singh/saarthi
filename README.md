@@ -1,18 +1,36 @@
 # Saarthi
 
-Saarthi is a voice assistant for non-technical users who get stuck on websites. Drop in one script tag, let a user enter their phone number, and Saarthi calls them back through ElevenLabs. During the call, the user can hover over any part of the page and ask, "What is this?" Saarthi captures page context, asks OpenAI vision for a simple explanation, and speaks it back in the same ElevenLabs conversation.
+Saarthi is an embeddable voice assistant for non-technical users who get stuck on websites. Add one script tag, and users can press a floating mic, ask what something means, and hear a simple spoken answer without leaving the page.
+
+This version is open-source speech first:
+
+- ASR: Parakeet on a CPU voice worker
+- TTS: Piper on the same CPU voice worker
+- LLM: OpenAI, default `OPENAI_MODEL=gpt-5.5-mini`
+- Calls: none
+- Twilio/ElevenLabs: not used
 
 ## How It Works
 
-1. A website embeds `widget.js`.
-2. The widget opens a small floating Saarthi button.
-3. The user enters their phone number.
-4. The server starts an ElevenLabs outbound callback.
-5. The ElevenLabs agent greets the user and asks what they need help with.
-6. When the user asks "what is this?", the ElevenLabs webhook tool calls Saarthi.
-7. Saarthi asks the browser widget for fresh context.
-8. The widget captures a full viewport screenshot, a 400px crop around the cursor, a 100px tight crop, and DOM metadata.
-9. The server sends that context to OpenAI vision and returns a plain explanation to ElevenLabs.
+1. A website embeds `public/widget.js`.
+2. The widget tracks the cursor and visible page controls locally.
+3. The user presses the mic and asks a short question.
+4. The website backend receives browser audio and safe page context at `POST /api/voice/turn`.
+5. The backend sends audio to the voice worker `POST /asr`.
+6. The backend asks OpenAI for a plain-language explanation or verbal next step.
+7. The backend sends the answer to the voice worker `POST /tts`.
+8. The widget plays the returned WAV audio in the browser.
+
+## What Do I Pay For?
+
+You do not need Twilio, ElevenLabs, or a phone provider for this build.
+
+You still pay for:
+
+- OpenAI API usage.
+- CPU hosting if the voice worker is not running on your own machine.
+
+Vercel can host the Next.js website and API gateway, but it is not the right place for Parakeet and Piper model loading. Run the voice worker as a long-lived process on a VM, container host, or local machine, then set `VOICE_SERVICE_URL`.
 
 ## Embed
 
@@ -26,10 +44,10 @@ Add this before `</body>`:
 ></script>
 ```
 
-For local testing, open `/embed-test`. It embeds the widget exactly like a customer website would:
+For local testing, open `/embed-test`:
 
 ```html
-<script src="/widget.js" data-site-id="demo" data-demo="true" async></script>
+<script src="/widget.js" data-site-id="demo" async></script>
 ```
 
 ## Environment
@@ -40,57 +58,59 @@ Create `.env.local`:
 cp .env.example .env.local
 ```
 
-Required values:
+Minimum values:
 
 ```bash
-ELEVENLABS_API_KEY=
-ELEVENLABS_AGENT_ID=
-ELEVENLABS_AGENT_PHONE_NUMBER_ID=
 OPENAI_API_KEY=
-SAARTHI_PUBLIC_URL=https://your-domain.com
+OPENAI_MODEL=gpt-5.5-mini
+SAARTHI_ALLOWED_ORIGINS=https://your-domain.com
+VOICE_SERVICE_URL=http://127.0.0.1:8010
+VOICE_SERVICE_AUTH_TOKEN=
 ```
 
-Optional values:
+The app can also read an OpenAI key from:
 
 ```bash
-ELEVENLABS_VOICE_ID=
 OPENAI_API_KEY_FILE=/Users/you/Desktop/files/orange/openai_api_key.txt
-OPENAI_VISION_MODEL=gpt-4o
-SAARTHI_FIRST_MESSAGE="Hi, I am Saarthi. I can help you use this website. What do you need help with?"
 ```
 
-Secrets are server-only. Do not expose ElevenLabs or OpenAI keys in the script tag.
+## Local Development
 
-## ElevenLabs Setup
-
-Saarthi expects an ElevenLabs phone agent with a webhook tool.
-
-You can create the agent and tool through the API:
-
-```bash
-SAARTHI_PUBLIC_URL=https://your-domain.com npm run provision:elevenlabs
-```
-
-The script creates:
-
-- an ElevenLabs webhook tool named `explain_current_element`
-- an ElevenLabs agent named `Saarthi`
-- local `.env.local` entries for `ELEVENLABS_AGENT_ID` and `ELEVENLABS_EXPLAIN_TOOL_ID`
-
-You still need to set `ELEVENLABS_AGENT_PHONE_NUMBER_ID` after importing or selecting a Twilio phone number in ElevenLabs.
-
-The live tool URL is:
-
-```txt
-POST /api/elevenlabs/explain
-```
-
-The tool should pass `saarthi_session_id` from conversation dynamic variables. The outbound call route sends that dynamic variable when the user requests a callback.
-
-## Development
+Install the website dependencies:
 
 ```bash
 npm install
+```
+
+Install the voice worker dependencies:
+
+```bash
+python -m venv .venv-voice
+source .venv-voice/bin/activate
+pip install -r services/voice/requirements.txt
+```
+
+Install `ffmpeg`:
+
+```bash
+brew install ffmpeg
+```
+
+Download the default Piper English voice:
+
+```bash
+python scripts/download-piper-voice.py
+```
+
+Start the voice worker:
+
+```bash
+uvicorn services.voice.app:app --host 0.0.0.0 --port 8010 --workers 1
+```
+
+Start the website in another terminal:
+
+```bash
 npm run dev
 ```
 
@@ -98,21 +118,48 @@ Open:
 
 - website: `http://localhost:3000`
 - embed demo: `http://localhost:3000/embed-test`
-- health check: `http://localhost:3000/api/health`
+- web health: `http://localhost:3000/api/health`
+- voice worker health: `http://localhost:8010/health`
+
+## Docker Compose
+
+For one-box development:
+
+```bash
+cp .env.example .env.local
+python scripts/download-piper-voice.py
+docker compose up --build
+```
+
+The first Parakeet model load can take time and needs several GB of RAM.
+
+## Deployment
+
+Recommended production shape:
+
+- Vercel: Next.js site, `/widget.js`, and `/api/voice/turn`.
+- CPU worker: FastAPI service running Parakeet, Piper, and `ffmpeg`.
+- Env on Vercel: `OPENAI_API_KEY`, `OPENAI_MODEL`, `VOICE_SERVICE_URL`, and `VOICE_SERVICE_AUTH_TOKEN` if the worker is remote.
+
+If the worker is on the same VPS as the website backend, bind it to `127.0.0.1`. If it is remote from Vercel, expose it behind HTTPS and set the same `VOICE_SERVICE_AUTH_TOKEN` on Vercel and the worker.
 
 ## API Routes
 
-- `POST /api/call` starts the ElevenLabs callback.
-- `POST /api/elevenlabs/explain` handles the live ElevenLabs webhook tool.
-- `GET /api/sessions/:sessionId/actions` lets the widget poll for capture requests.
-- `POST /api/sessions/:sessionId/context` sends screenshot and DOM context back to the server.
-- `GET /api/sessions/:sessionId/status` exposes demo/debug session state.
+- `POST /api/voice/turn`: accepts `multipart/form-data` with `audio` and `context`; returns transcript, reply text, and WAV audio as base64.
+- `GET /api/health`: confirms the Next.js app is alive.
+- `GET /health` on the voice worker: reports ASR/TTS configuration.
+- `POST /asr` on the voice worker: browser audio in, transcript out.
+- `POST /tts` on the voice worker: text in, `audio/wav` out.
 
 ## Privacy
 
-Saarthi does not continuously stream the screen. It tracks the cursor locally and captures screenshots only when the caller asks for help during a live session. The widget redacts obvious sensitive fields and ignores regions marked with `data-saarthi-private`.
+Saarthi does not continuously stream the screen. It records only after the user presses the mic. The widget sends cursor position, the element under the cursor, and nearby visible controls. It strips URL query strings, avoids form values by default, and skips page regions marked with:
 
-For production, replace the in-memory session store with Redis, add per-site origin allowlists, rate-limit phone submissions, and verify any sensitive webhook paths with a secret header.
+```html
+data-saarthi-private
+```
+
+Before public production, add site allowlists, signed embed keys, rate limits, and worker authentication so unknown sites cannot use your OpenAI or CPU budget.
 
 ## License
 

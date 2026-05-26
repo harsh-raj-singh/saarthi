@@ -14,9 +14,11 @@
   var scriptUrl = currentScript && currentScript.src ? new URL(currentScript.src) : new URL(window.location.href);
   var apiBase = ((currentScript && currentScript.dataset.apiBase) || scriptUrl.origin).replace(/\/$/, "");
   var siteId = (currentScript && currentScript.dataset.siteId) || "demo";
-  var demoMode = Boolean(currentScript && currentScript.dataset.demo);
-  var pollMs = Number((currentScript && currentScript.dataset.pollMs) || 900);
-  var handledActions = Object.create(null);
+  var maxRecordMs = Number((currentScript && currentScript.dataset.maxRecordMs) || 12000);
+  var recorder = null;
+  var stream = null;
+  var chunks = [];
+  var recordTimer = null;
 
   function uuid() {
     if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
@@ -24,16 +26,17 @@
   }
 
   var sessionKey = "saarthi:session:" + siteId;
-  var sessionId = localStorage.getItem(sessionKey) || uuid();
-  localStorage.setItem(sessionKey, sessionId);
+  var sessionId = readStorage(sessionKey) || uuid();
+  writeStorage(sessionKey, sessionId);
 
   var state = {
     open: false,
     busy: false,
-    phone: "",
-    message: "Ready when you are.",
+    recording: false,
     status: "idle",
-    latestExplanation: "",
+    message: "Press the mic and ask for help.",
+    transcript: "",
+    reply: "",
     cursor: {
       x: Math.round(window.innerWidth / 2),
       y: Math.round(window.innerHeight / 2),
@@ -49,44 +52,49 @@
 
   var css = document.createElement("style");
   css.textContent = [
-    ":host{all:initial;position:fixed;z-index:2147483647;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#1a1f2e}",
+    ":host{all:initial;position:fixed;z-index:2147483647;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#172033}",
     "*{box-sizing:border-box}",
     ".wrap{position:fixed;right:22px;bottom:22px;display:flex;flex-direction:column;align-items:flex-end;gap:12px}",
     ".cursor{position:fixed;left:0;top:0;width:34px;height:34px;margin:-17px 0 0 -17px;border:2px solid rgba(34,197,94,.85);border-radius:999px;box-shadow:0 0 0 9px rgba(34,197,94,.14);pointer-events:none;opacity:0;transform:translate3d(var(--x),var(--y),0);transition:opacity .2s ease}",
     ".cursor.on{opacity:1}",
-    ".panel{width:min(360px,calc(100vw - 32px));border:1px solid rgba(20,28,45,.12);border-radius:20px;background:rgba(255,255,255,.94);box-shadow:0 24px 80px rgba(17,24,39,.22);backdrop-filter:blur(18px);overflow:hidden;transform-origin:bottom right;animation:saarthi-in .22s ease}",
+    ".panel{width:min(370px,calc(100vw - 32px));border:1px solid rgba(20,28,45,.12);border-radius:20px;background:rgba(255,255,255,.95);box-shadow:0 24px 80px rgba(17,24,39,.22);backdrop-filter:blur(18px);overflow:hidden;transform-origin:bottom right;animation:saarthi-in .22s ease}",
     "@keyframes saarthi-in{from{opacity:0;transform:translateY(10px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}",
     ".top{display:flex;align-items:center;gap:12px;padding:16px;border-bottom:1px solid rgba(20,28,45,.09);background:linear-gradient(135deg,rgba(240,253,244,.92),rgba(255,247,237,.9))}",
-    ".mark{display:grid;place-items:center;width:42px;height:42px;border-radius:16px;background:#10231a;color:#dcfce7;font-weight:800;box-shadow:inset 0 -12px 24px rgba(34,197,94,.16)}",
-    ".title{font-size:15px;font-weight:800;letter-spacing:0}.sub{font-size:12px;color:#5f6b7a;margin-top:2px;line-height:1.35}",
+    ".mark{display:grid;place-items:center;width:42px;height:42px;border-radius:16px;background:#10231a;color:#dcfce7;font-weight:900;box-shadow:inset 0 -12px 24px rgba(34,197,94,.16)}",
+    ".title{font-size:15px;font-weight:900;letter-spacing:0}.sub{font-size:12px;color:#5f6b7a;margin-top:2px;line-height:1.35}",
     ".body{padding:16px;display:grid;gap:12px}",
-    ".label{font-size:12px;font-weight:750;color:#4b5563}",
-    ".input{width:100%;height:44px;border:1px solid rgba(20,28,45,.18);border-radius:14px;padding:0 13px;font:500 15px/1 inherit;color:#172033;outline:none;background:#fff}",
-    ".input:focus{border-color:#16a34a;box-shadow:0 0 0 4px rgba(34,197,94,.16)}",
-    ".row{display:flex;gap:10px}.row>*{min-width:0}",
-    "button{font:750 14px/1 inherit;border:0;cursor:pointer}",
-    ".primary{height:44px;min-width:126px;border-radius:14px;background:#172033;color:#fff;padding:0 16px;box-shadow:0 10px 26px rgba(23,32,51,.2)}",
-    ".primary:disabled{cursor:not-allowed;opacity:.58}",
-    ".secondary{height:40px;border-radius:13px;padding:0 13px;background:#eefdf3;color:#17613a;border:1px solid rgba(22,163,74,.18)}",
+    "button{font:800 14px/1 inherit;border:0;cursor:pointer;letter-spacing:0}",
+    ".mic{display:grid;place-items:center;width:86px;height:86px;margin:2px auto;border-radius:999px;background:#172033;color:#fff;box-shadow:0 18px 46px rgba(23,32,51,.24)}",
+    ".mic:disabled{cursor:not-allowed;opacity:.58}.mic.recording{background:#dc2626;box-shadow:0 0 0 10px rgba(220,38,38,.13),0 18px 46px rgba(220,38,38,.18)}",
+    ".mic svg{width:32px;height:32px}",
+    ".actions{display:flex;gap:10px}.actions>*{flex:1;min-width:0}",
+    ".secondary{height:42px;border-radius:13px;padding:0 13px;background:#eefdf3;color:#17613a;border:1px solid rgba(22,163,74,.18)}",
+    ".secondary.stop{background:#fff1f2;color:#9f1239;border-color:rgba(225,29,72,.18)}",
     ".note{padding:11px 12px;border-radius:14px;background:#f8fafc;color:#3d4656;font-size:13px;line-height:1.45;border:1px solid rgba(20,28,45,.08)}",
     ".note.good{background:#f0fdf4;color:#14532d;border-color:rgba(22,163,74,.18)}",
     ".note.warn{background:#fff7ed;color:#7c2d12;border-color:rgba(249,115,22,.18)}",
     ".pulse{display:inline-flex;width:7px;height:7px;border-radius:999px;background:#22c55e;margin-right:7px;box-shadow:0 0 0 5px rgba(34,197,94,.13);vertical-align:middle}",
+    ".pulse.recording{background:#ef4444;box-shadow:0 0 0 5px rgba(239,68,68,.14)}",
     ".fab{display:flex;align-items:center;justify-content:center;gap:10px;height:58px;border-radius:999px;padding:0 18px 0 13px;background:#172033;color:#fff;box-shadow:0 18px 48px rgba(17,24,39,.28);border:1px solid rgba(255,255,255,.14)}",
     ".orb{display:grid;place-items:center;width:36px;height:36px;border-radius:999px;background:#dcfce7;color:#14532d;font-weight:900}",
-    ".fabText{font-size:14px;font-weight:800;letter-spacing:0}.hidden{display:none!important}",
+    ".fabText{font-size:14px;font-weight:900}.hidden{display:none!important}",
     ".close{margin-left:auto;width:32px;height:32px;border-radius:12px;background:rgba(255,255,255,.62);color:#172033}",
     ".mini{font-size:11px;color:#6b7280;line-height:1.35}.mono{font-family:'SFMono-Regular',Consolas,monospace}",
+    ".label{font-size:11px;font-weight:900;text-transform:uppercase;color:#6b7280;letter-spacing:.12em;margin-bottom:6px}",
   ].join("");
 
   var root = document.createElement("div");
   shadow.appendChild(css);
   shadow.appendChild(root);
 
+  function micSvg() {
+    return '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3Z" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M19 11a7 7 0 0 1-14 0M12 18v3M8 21h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+  }
+
   function render() {
     root.innerHTML =
       '<div class="cursor ' +
-      (state.status === "active" || state.status === "capturing" ? "on" : "") +
+      (state.open ? "on" : "") +
       '" style="--x:' +
       state.cursor.x +
       "px;--y:" +
@@ -96,30 +104,47 @@
       '<section class="panel ' +
       (state.open ? "" : "hidden") +
       '" aria-live="polite">' +
-      '<div class="top"><div class="mark">S</div><div><div class="title">Saarthi</div><div class="sub"><span class="pulse"></span>Voice help for this page</div></div><button class="close" type="button" data-action="close" aria-label="Close Saarthi">x</button></div>' +
-      '<form class="body" data-action="form">' +
-      '<label><div class="label">Phone number</div><input class="input" name="phone" inputmode="tel" autocomplete="tel" placeholder="+1 555 012 3456" value="' +
-      escapeHtml(state.phone) +
-      '"></label>' +
-      '<div class="row"><button class="primary" type="submit" ' +
-      (state.busy ? "disabled" : "") +
+      '<div class="top"><div class="mark">S</div><div><div class="title">Saarthi</div><div class="sub"><span class="pulse ' +
+      (state.recording ? "recording" : "") +
+      '"></span>' +
+      (state.recording ? "Listening on this page" : "Local voice guide") +
+      '</div></div><button class="close" type="button" data-action="close" aria-label="Close Saarthi">x</button></div>' +
+      '<div class="body">' +
+      '<button class="mic ' +
+      (state.recording ? "recording" : "") +
+      '" type="button" data-action="' +
+      (state.recording ? "stop" : "record") +
+      '" ' +
+      (state.busy && !state.recording ? "disabled" : "") +
+      ' aria-label="' +
+      (state.recording ? "Stop recording" : "Ask Saarthi") +
+      '">' +
+      micSvg() +
+      "</button>" +
+      '<div class="actions"><button class="secondary ' +
+      (state.recording ? "stop" : "") +
+      '" type="button" data-action="' +
+      (state.recording ? "stop" : "record") +
+      '" ' +
+      (state.busy && !state.recording ? "disabled" : "") +
       ">" +
-      (state.busy && state.status === "capturing" ? "Capturing..." : state.busy ? "Calling..." : "Call me") +
-      '</button><button class="secondary ' +
-      (demoMode ? "" : "hidden") +
-      '" type="button" data-action="simulate">Try "what is this?"</button></div>' +
+      (state.recording ? "Stop" : state.busy ? "Thinking..." : "Hold a voice turn") +
+      "</button></div>" +
       '<div class="note ' +
-      (state.status === "active" ? "good" : state.status === "error" ? "warn" : "") +
+      (state.status === "ready" ? "good" : state.status === "error" ? "warn" : "") +
       '">' +
       escapeHtml(state.message) +
       "</div>" +
-      (state.latestExplanation
-        ? '<div class="note"><strong>Latest explanation</strong><br>' + escapeHtml(state.latestExplanation) + "</div>"
+      (state.transcript
+        ? '<div class="note"><div class="label">You said</div>' + escapeHtml(state.transcript) + "</div>"
+        : "") +
+      (state.reply
+        ? '<div class="note good"><div class="label">Saarthi said</div>' + escapeHtml(state.reply) + "</div>"
         : "") +
       '<div class="mini">Session <span class="mono">' +
       escapeHtml(sessionId.slice(0, 8)) +
-      '</span>. Hover over the page during the call and ask, "What is this?"</div>' +
-      "</form></section>" +
+      '</span>. Hover over anything, then ask what it is or what to do next.</div>' +
+      "</div></section>" +
       '<button class="fab" type="button" data-action="toggle" aria-label="Open Saarthi"><span class="orb">S</span><span class="fabText">Ask Saarthi</span></button>' +
       "</div>";
   }
@@ -132,101 +157,35 @@
       .replace(/"/g, "&quot;");
   }
 
+  function readStorage(key) {
+    try {
+      return window.localStorage ? localStorage.getItem(key) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function writeStorage(key, value) {
+    try {
+      if (window.localStorage) localStorage.setItem(key, value);
+    } catch {
+      // Some embedded contexts block storage. Saarthi still works with a one-tab session.
+    }
+  }
+
+  function cssEscape(value) {
+    if (window.CSS && CSS.escape) return CSS.escape(value);
+    return String(value).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+  }
+
   function setState(next) {
     Object.assign(state, next);
     render();
   }
 
-  function postJson(url, body) {
-    return fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Saarthi-Session": sessionId },
-      body: JSON.stringify(body),
-    }).then(function (res) {
-      return res.json().then(function (data) {
-        if (!res.ok || data.ok === false) throw new Error(data.error || "Request failed.");
-        return data;
-      });
-    });
-  }
-
-  function startCall(phone) {
-    setState({
-      busy: true,
-      phone: phone,
-      message: "Starting an ElevenLabs callback...",
-      status: "calling",
-    });
-
-    return postJson(apiBase + "/api/call", {
-      phone: phone,
-      sessionId: sessionId,
-      siteId: siteId,
-      pageUrl: window.location.href,
-      pageTitle: document.title,
-    })
-      .then(function (data) {
-        setState({
-          busy: false,
-          status: "active",
-          message:
-            "Your call is starting. During the call, hover over anything and ask, “What is this?”",
-        });
-        if (data.sessionId && data.sessionId !== sessionId) {
-          sessionId = data.sessionId;
-          localStorage.setItem(sessionKey, sessionId);
-        }
-      })
-      .catch(function (error) {
-        setState({
-          busy: false,
-          status: "error",
-          message: error.message || "Could not start the callback.",
-        });
-      });
-  }
-
-  function simulateWhatIsThis() {
-    setState({
-      busy: true,
-      status: "capturing",
-      message: 'Simulating the spoken phrase "What is this?"...',
-    });
-
-    fetch(apiBase + "/api/elevenlabs/explain", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        session_id: sessionId,
-        question: "What is this?",
-        dynamic_variables: { saarthi_session_id: sessionId },
-      }),
-    })
-      .then(function (res) {
-        return res.json();
-      })
-      .then(function (data) {
-        setState({
-          busy: false,
-          status: "active",
-          message: "Saarthi answered the simulated tool call.",
-          latestExplanation: data.explanation || data.response || "",
-        });
-      })
-      .catch(function (error) {
-        setState({
-          busy: false,
-          status: "error",
-          message: error.message || "The simulated explanation failed.",
-        });
-      });
-  }
-
   function updateCursor(event) {
     var path = event.composedPath ? event.composedPath() : [];
-    if (path.indexOf(host) !== -1) {
-      return;
-    }
+    if (path.indexOf(host) !== -1) return;
 
     state.cursor = {
       x: Math.max(0, Math.min(window.innerWidth, Math.round(event.clientX))),
@@ -240,13 +199,51 @@
     }
   }
 
+  function safeUrl(value) {
+    if (!value) return null;
+    try {
+      var url = new URL(value, window.location.href);
+      url.search = "";
+      url.hash = "";
+      return url.toString();
+    } catch {
+      return String(value).split("?")[0].split("#")[0].slice(0, 220);
+    }
+  }
+
+  function pageUrl() {
+    return safeUrl(window.location.href);
+  }
+
+  function buildSelector(el) {
+    if (!el || !el.tagName) return null;
+    if (el.id) return "#" + cssEscape(el.id);
+    var parts = [];
+    var node = el;
+    while (node && node.nodeType === 1 && parts.length < 4 && node !== document.documentElement) {
+      var part = node.tagName.toLowerCase();
+      var testId = node.getAttribute("data-testid") || node.getAttribute("data-test");
+      if (testId) part += '[data-testid="' + testId.replace(/"/g, '\\"') + '"]';
+      parts.unshift(part);
+      node = node.parentElement;
+    }
+    return parts.join(" > ");
+  }
+
   function describeElement(el) {
     if (!el) return {};
+    if (el.closest && el.closest("[data-saarthi-private]")) {
+      return {
+        private: true,
+        tagName: el.tagName ? el.tagName.toLowerCase() : undefined,
+      };
+    }
+
     var rect = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
     var labelText = "";
     var id = el.getAttribute && el.getAttribute("id");
     if (id) {
-      var label = document.querySelector('label[for="' + CSS.escape(id) + '"]');
+      var label = document.querySelector('label[for="' + cssEscape(id) + '"]');
       labelText = label ? label.innerText : "";
     }
     var labelledBy = el.getAttribute && el.getAttribute("aria-labelledby");
@@ -274,11 +271,8 @@
       ariaLabel: el.getAttribute && (el.getAttribute("aria-label") || null),
       title: el.getAttribute && (el.getAttribute("title") || null),
       placeholder: el.getAttribute && (el.getAttribute("placeholder") || null),
-      href: el.getAttribute && (el.getAttribute("href") || null),
-      value:
-        el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement
-          ? safeFormValue(el)
-          : null,
+      href: el.getAttribute && safeUrl(el.getAttribute("href")),
+      value: null,
       selector: buildSelector(el),
       rect: rect
         ? {
@@ -291,218 +285,240 @@
     };
   }
 
-  function safeFormValue(el) {
-    var type = (el.getAttribute("type") || "").toLowerCase();
-    if (type === "password" || type === "hidden" || /card|cc|cvv|token|secret/i.test(el.name || "")) {
-      return "[redacted]";
-    }
-    return String(el.value || "").slice(0, 80);
-  }
-
-  function buildSelector(el) {
-    if (!el || !el.tagName) return null;
-    if (el.id) return "#" + CSS.escape(el.id);
-    var parts = [];
-    var node = el;
-    while (node && node.nodeType === 1 && parts.length < 4 && node !== document.documentElement) {
-      var part = node.tagName.toLowerCase();
-      var testId = node.getAttribute("data-testid") || node.getAttribute("data-test");
-      if (testId) part += '[data-testid="' + testId.replace(/"/g, '\\"') + '"]';
-      parts.unshift(part);
-      node = node.parentElement;
-    }
-    return parts.join(" > ");
-  }
-
-  function loadHtml2Canvas() {
-    if (window.html2canvas) return Promise.resolve(window.html2canvas);
-    if (window.__saarthiHtml2CanvasPromise) return window.__saarthiHtml2CanvasPromise;
-
-    window.__saarthiHtml2CanvasPromise = new Promise(function (resolve, reject) {
-      var script = document.createElement("script");
-      script.src = "https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js";
-      script.async = true;
-      script.onload = function () {
-        resolve(window.html2canvas);
-      };
-      script.onerror = function () {
-        reject(new Error("Could not load html2canvas."));
-      };
-      document.head.appendChild(script);
-    });
-    return window.__saarthiHtml2CanvasPromise;
-  }
-
-  function shouldIgnoreElement(el) {
-    if (!el || !el.closest) return false;
-    return Boolean(
-      el.closest("#saarthi-widget-root") ||
-        el.closest("[data-saarthi-private]") ||
-        el.closest("[aria-hidden='true'][data-saarthi-ignore]")
-    );
-  }
-
-  function redactClone(clonedDocument) {
-    var safeStyle = clonedDocument.createElement("style");
-    safeStyle.textContent = [
-      ":root,html,body{background:#ffffff!important;color:#172033!important}",
-      "*,*::before,*::after{background-image:none!important;border-color:rgba(23,32,51,.16)!important;box-shadow:none!important;color:#172033!important;outline-color:#22c55e!important;text-shadow:none!important}",
-      "button,a,[role='button']{background:#172033!important;color:#ffffff!important}",
-      "input,textarea,select{background:#ffffff!important;color:#172033!important}",
-      "[data-saarthi-redacted]{background:#fee2e2!important;color:#7f1d1d!important}",
-    ].join("");
-    clonedDocument.head.appendChild(safeStyle);
-
-    var selectors = [
-      "input[type='password']",
-      "input[name*='card' i]",
-      "input[name*='cc' i]",
-      "input[name*='cvv' i]",
-      "input[autocomplete='cc-number']",
-      "input[autocomplete='one-time-code']",
-      "[data-saarthi-private]",
-    ];
-    clonedDocument.querySelectorAll(selectors.join(",")).forEach(function (node) {
-      if ("value" in node) node.value = "[redacted]";
-      node.textContent = "[redacted]";
-      node.setAttribute("data-saarthi-redacted", "true");
-    });
-  }
-
-  function cropCanvas(canvas, centerX, centerY, size) {
-    var scaleX = canvas.width / Math.max(1, window.innerWidth);
-    var scaleY = canvas.height / Math.max(1, window.innerHeight);
-    var cropSizeX = Math.min(canvas.width, Math.round(size * scaleX));
-    var cropSizeY = Math.min(canvas.height, Math.round(size * scaleY));
-    var sx = Math.max(0, Math.min(canvas.width - cropSizeX, Math.round(centerX * scaleX - cropSizeX / 2)));
-    var sy = Math.max(0, Math.min(canvas.height - cropSizeY, Math.round(centerY * scaleY - cropSizeY / 2)));
-    var out = document.createElement("canvas");
-    out.width = cropSizeX;
-    out.height = cropSizeY;
-    var ctx = out.getContext("2d");
-    ctx.drawImage(canvas, sx, sy, cropSizeX, cropSizeY, 0, 0, cropSizeX, cropSizeY);
-    return out;
-  }
-
-  function compressCanvas(canvas, quality, maxWidth) {
-    var source = canvas;
-    if (canvas.width > maxWidth) {
-      var resized = document.createElement("canvas");
-      var ratio = maxWidth / canvas.width;
-      resized.width = maxWidth;
-      resized.height = Math.round(canvas.height * ratio);
-      resized.getContext("2d").drawImage(canvas, 0, 0, resized.width, resized.height);
-      source = resized;
-    }
-    return source.toDataURL("image/jpeg", quality);
-  }
-
-  function fallbackImage() {
-    return "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lJVr9QAAAABJRU5ErkJggg==";
-  }
-
-  function postFallbackContext(action, error) {
+  function pageContext() {
     var cursor = state.cursor;
     var target = document.elementFromPoint(cursor.x, cursor.y);
-    return postJson(apiBase + "/api/sessions/" + encodeURIComponent(sessionId) + "/context", {
-      actionId: action.id,
+    return {
+      siteId: siteId,
       sessionId: sessionId,
       capturedAt: new Date().toISOString(),
       page: {
-        url: window.location.href,
+        url: pageUrl(),
         title: document.title,
         viewport: { width: window.innerWidth, height: window.innerHeight },
         scroll: { x: window.scrollX, y: window.scrollY },
         cursor: { x: cursor.x, y: cursor.y },
       },
-      element: Object.assign(describeElement(target), {
-        captureError: error && error.message ? error.message : "html2canvas capture failed",
-      }),
-      screenshots: {
-        viewport: fallbackImage(),
-        crop400: fallbackImage(),
-        crop100: fallbackImage(),
-      },
-    });
+      element: describeElement(target),
+      visibleControls: visibleControls(),
+    };
   }
 
-  function captureContext(action) {
-    setState({ status: "capturing", message: "Looking at the item under your cursor..." });
-    var cursor = state.cursor;
-    var target = document.elementFromPoint(cursor.x, cursor.y);
-    var element = describeElement(target);
+  function visibleControls() {
+    var selector = [
+      "a[href]",
+      "button",
+      "input",
+      "select",
+      "textarea",
+      "summary",
+      "[role='button']",
+      "[role='link']",
+      "[role='menuitem']",
+      "[tabindex]:not([tabindex='-1'])",
+    ].join(",");
+    var nodes = Array.prototype.slice.call(document.querySelectorAll(selector));
+    var controls = [];
 
-    return loadHtml2Canvas()
-      .then(function (html2canvas) {
-        return html2canvas(document.documentElement, {
-          useCORS: true,
-          allowTaint: false,
-          backgroundColor: "#ffffff",
-          scale: Math.min(window.devicePixelRatio || 1, 2),
-          x: window.scrollX,
-          y: window.scrollY,
-          width: window.innerWidth,
-          height: window.innerHeight,
-          windowWidth: document.documentElement.scrollWidth,
-          windowHeight: document.documentElement.scrollHeight,
-          ignoreElements: shouldIgnoreElement,
-          onclone: redactClone,
-        });
+    for (var i = 0; i < nodes.length && controls.length < 24; i += 1) {
+      var node = nodes[i];
+      if (!node || node === host || (node.closest && node.closest("[data-saarthi-private]"))) continue;
+      var rect = node.getBoundingClientRect ? node.getBoundingClientRect() : null;
+      if (!rect || rect.width < 2 || rect.height < 2) continue;
+      if (rect.bottom < 0 || rect.right < 0 || rect.top > window.innerHeight || rect.left > window.innerWidth) continue;
+
+      var summary = describeElement(node);
+      if (summary.innerText || summary.ariaLabel || summary.placeholder || summary.title || summary.value) {
+        controls.push(summary);
+      }
+    }
+
+    return controls;
+  }
+
+  function filenameForMime(type) {
+    if (/mp4|m4a/i.test(type)) return "saarthi-voice.m4a";
+    if (/wav/i.test(type)) return "saarthi-voice.wav";
+    if (/ogg/i.test(type)) return "saarthi-voice.ogg";
+    return "saarthi-voice.webm";
+  }
+
+  function chooseMimeType() {
+    var candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/wav"];
+    for (var i = 0; i < candidates.length; i += 1) {
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported(candidates[i])) {
+        return candidates[i];
+      }
+    }
+    return "";
+  }
+
+  function stopTracks() {
+    if (stream) {
+      stream.getTracks().forEach(function (track) {
+        track.stop();
+      });
+    }
+    stream = null;
+  }
+
+  function startRecording() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) {
+      setState({
+        status: "error",
+        message: "This browser does not support in-page voice recording.",
+      });
+      return;
+    }
+
+    setState({
+      busy: false,
+      recording: true,
+      status: "recording",
+      message: "Listening. Ask what this is or what to do next.",
+      transcript: "",
+      reply: "",
+    });
+
+    navigator.mediaDevices
+      .getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
       })
-      .then(function (canvas) {
-        var payload = {
-          actionId: action.id,
-          sessionId: sessionId,
-          capturedAt: new Date().toISOString(),
-          page: {
-            url: window.location.href,
-            title: document.title,
-            viewport: { width: window.innerWidth, height: window.innerHeight },
-            scroll: { x: window.scrollX, y: window.scrollY },
-            cursor: { x: cursor.x, y: cursor.y },
-          },
-          element: element,
-          screenshots: {
-            viewport: compressCanvas(canvas, 0.68, 1280),
-            crop400: compressCanvas(cropCanvas(canvas, cursor.x, cursor.y, 400), 0.78, 900),
-            crop100: compressCanvas(cropCanvas(canvas, cursor.x, cursor.y, 100), 0.86, 420),
-          },
+      .then(function (mediaStream) {
+        stream = mediaStream;
+        chunks = [];
+        var mimeType = chooseMimeType();
+        recorder = new MediaRecorder(stream, mimeType ? { mimeType: mimeType } : undefined);
+        recorder.ondataavailable = function (event) {
+          if (event.data && event.data.size > 0) chunks.push(event.data);
         };
-
-        return postJson(apiBase + "/api/sessions/" + encodeURIComponent(sessionId) + "/context", payload);
-      })
-      .then(function () {
-        setState({
-          status: "active",
-          message: "I sent Saarthi a fresh look at the page.",
-        });
+        recorder.onstop = finishRecording;
+        recorder.start();
+        recordTimer = window.setTimeout(stopRecording, Math.max(4000, maxRecordMs));
       })
       .catch(function (error) {
-        return postFallbackContext(action, error).finally(function () {
-          setState({
-            status: "active",
-            message:
-              "The page resisted screenshot capture, so I sent Saarthi the element details instead.",
-          });
+        stopTracks();
+        setState({
+          busy: false,
+          recording: false,
+          status: "error",
+          message: error && error.message ? error.message : "Microphone permission was not granted.",
         });
       });
   }
 
-  function poll() {
-    fetch(apiBase + "/api/sessions/" + encodeURIComponent(sessionId) + "/actions", {
+  function stopRecording() {
+    if (recordTimer) window.clearTimeout(recordTimer);
+    recordTimer = null;
+    if (recorder && recorder.state !== "inactive") {
+      recorder.stop();
+    }
+  }
+
+  function finishRecording() {
+    stopTracks();
+    setState({
+      busy: true,
+      recording: false,
+      status: "processing",
+      message: "Transcribing and thinking...",
+    });
+
+    var type = chunks[0] && chunks[0].type ? chunks[0].type : "audio/webm";
+    var audioBlob = new Blob(chunks, { type: type });
+    chunks = [];
+
+    if (!audioBlob.size) {
+      setState({
+        busy: false,
+        status: "error",
+        message: "I could not capture audio. Please try once more.",
+      });
+      return;
+    }
+
+    var context;
+    try {
+      context = pageContext();
+    } catch {
+      setState({
+        busy: false,
+        status: "error",
+        message: "I could not read the page context. Please move your cursor and try again.",
+      });
+      return;
+    }
+
+    var form = new FormData();
+    form.append("audio", audioBlob, filenameForMime(type));
+    form.append("context", JSON.stringify(context));
+
+    var controller = new AbortController();
+    var timeout = window.setTimeout(function () {
+      controller.abort();
+    }, 120000);
+
+    fetch(apiBase + "/api/voice/turn", {
+      method: "POST",
       headers: { "X-Saarthi-Session": sessionId },
+      body: form,
+      signal: controller.signal,
     })
       .then(function (res) {
-        return res.ok ? res.json() : { actions: [] };
-      })
-      .then(function (data) {
-        (data.actions || []).forEach(function (action) {
-          if (handledActions[action.id]) return;
-          handledActions[action.id] = true;
-          captureContext(action);
+        return res.json().then(function (data) {
+          if (!res.ok || data.ok === false) throw new Error(data.error || "Voice turn failed.");
+          return data;
         });
       })
-      .catch(function () {});
+      .then(function (data) {
+        setState({
+          busy: false,
+          status: "ready",
+          message: "Saarthi answered out loud.",
+          transcript: data.transcript || "",
+          reply: data.reply || "",
+        });
+        playAudio(data.audio);
+      })
+      .catch(function (error) {
+        setState({
+          busy: false,
+          status: "error",
+          message:
+            error && error.name === "AbortError"
+              ? "That took too long. Please try a shorter question."
+              : error.message || "Saarthi could not process that voice turn.",
+        });
+      })
+      .finally(function () {
+        window.clearTimeout(timeout);
+      });
+  }
+
+  function playAudio(audio) {
+    if (!audio || !audio.base64) return;
+    var byteString = atob(audio.base64);
+    var bytes = new Uint8Array(byteString.length);
+    for (var i = 0; i < byteString.length; i += 1) {
+      bytes[i] = byteString.charCodeAt(i);
+    }
+    var blob = new Blob([bytes], { type: audio.contentType || "audio/wav" });
+    var url = URL.createObjectURL(blob);
+    var player = new Audio(url);
+    player.onended = function () {
+      URL.revokeObjectURL(url);
+    };
+    player.play().catch(function () {
+      URL.revokeObjectURL(url);
+      setState({
+        status: "ready",
+        message: "Saarthi has an answer, but the browser blocked autoplay. Press the mic again to continue.",
+      });
+    });
   }
 
   shadow.addEventListener("click", function (event) {
@@ -511,29 +527,17 @@
     var action = actionTarget && actionTarget.getAttribute("data-action");
     if (action === "toggle") setState({ open: !state.open });
     if (action === "close") setState({ open: false });
-    if (action === "simulate") simulateWhatIsThis();
-  });
-
-  shadow.addEventListener("submit", function (event) {
-    event.preventDefault();
-    var form = event.target;
-    var input = form.querySelector("input[name='phone']");
-    startCall(input.value);
-  });
-
-  shadow.addEventListener("input", function (event) {
-    if (event.target && event.target.name === "phone") {
-      state.phone = event.target.value;
-    }
+    if (action === "record") startRecording();
+    if (action === "stop") stopRecording();
   });
 
   window.addEventListener("pointermove", updateCursor, { passive: true });
   window.addEventListener("mousemove", updateCursor, { passive: true });
   window.addEventListener("beforeunload", function () {
     window.__saarthiWidgetLoaded = false;
+    stopRecording();
+    stopTracks();
   });
 
   render();
-  setInterval(poll, Math.max(450, pollMs));
-  setTimeout(poll, 300);
 })();

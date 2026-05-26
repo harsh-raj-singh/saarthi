@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "provision:elevenlabs": "node scripts/provision-elevenlabs.mjs"
+    "voice:dev": "uvicorn services.voice.app:app --host 0.0.0.0 --port 8010 --workers 1",
+    "voice:download": "python scripts/download-piper-voice.py"
   },
   "dependencies": {
     "lucide-react": "^1.16.0",

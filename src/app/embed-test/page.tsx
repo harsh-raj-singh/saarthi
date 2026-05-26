@@ -16,12 +16,12 @@ export default function EmbedTestPage() {
           </Link>
           <h1 className="text-5xl font-black leading-tight">A normal page with one script tag.</h1>
           <p className="mt-5 max-w-xl text-lg leading-8 text-[#586476]">
-            Move your cursor over a control, open the Saarthi widget, and use the demo
-            simulation button. In production the same request comes from an ElevenLabs
-            phone call when the user asks, “What is this?”
+            Move your cursor over a control, open the Saarthi widget, press the mic,
+            and ask what it is or what to do next. The page sends browser audio and
+            safe context to the website backend.
           </p>
           <div className="mt-8 rounded-[8px] border border-[#172033]/10 bg-white p-4 shadow-sm">
-            <code className="text-sm text-emerald-800">{`<script src="/widget.js" data-demo="true" async></script>`}</code>
+            <code className="text-sm text-emerald-800">{`<script src="/widget.js" data-site-id="demo" async></script>`}</code>
           </div>
         </div>
 
@@ -100,7 +100,7 @@ export default function EmbedTestPage() {
         </div>
       </section>
 
-      <script src="/widget.js" data-site-id="demo" data-demo="true" async />
+      <script src="/widget.js" data-site-id="demo" async />
     </main>
   );
 }

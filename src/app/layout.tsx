@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Saarthi - Voice help for every website",
   description:
-    "An embeddable ElevenLabs voice assistant that explains website elements using live browser context and vision.",
+    "An embeddable in-page voice assistant that explains and verbally guides website users with open-source speech models.",
 };
 
 export default function RootLayout({
