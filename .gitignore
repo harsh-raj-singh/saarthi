@@ -22,9 +22,7 @@
 # production
 /build
 
-# local model weights and generated audio
-/models
-/services/voice/models
+# local Python/audio scratch files
 __pycache__/
 *.wav
 *.webm

@@ -2,35 +2,37 @@
 
 Saarthi is an embeddable voice assistant for non-technical users who get stuck on websites. Add one script tag, and users can press a floating mic, ask what something means, and hear a simple spoken answer without leaving the page.
 
-This version is open-source speech first:
+This version uses OpenAI for the whole voice loop:
 
-- ASR: Parakeet on a CPU voice worker
-- TTS: Piper on the same CPU voice worker
-- LLM: OpenAI, default `OPENAI_MODEL=gpt-5.5-mini`
+- Speech to text: `gpt-4o-mini-transcribe`
+- Website guidance: `gpt-4o-mini` by default
+- Text to speech: `gpt-4o-mini-tts`
+- Languages: English, Hindi, and natural Hinglish
 - Calls: none
-- Twilio/ElevenLabs: not used
+- Twilio, ElevenLabs, Parakeet, Piper: not used
 
 ## How It Works
 
 1. A website embeds `public/widget.js`.
 2. The widget tracks the cursor and visible page controls locally.
-3. The user presses the mic and asks a short question.
+3. The user presses the mic and asks a short question in English, Hindi, or Hinglish.
 4. The website backend receives browser audio and safe page context at `POST /api/voice/turn`.
-5. The backend sends audio to the voice worker `POST /asr`.
+5. The backend sends audio to OpenAI transcription.
 6. The backend asks OpenAI for a plain-language explanation or verbal next step.
-7. The backend sends the answer to the voice worker `POST /tts`.
-8. The widget plays the returned WAV audio in the browser.
+7. The backend sends the answer to OpenAI text-to-speech.
+8. The widget plays the returned audio in the browser.
 
 ## What Do I Pay For?
 
-You do not need Twilio, ElevenLabs, or a phone provider for this build.
+You do not need Twilio, ElevenLabs, or any CPU speech host for this build.
 
-You still pay for:
+You pay for OpenAI API usage:
 
-- OpenAI API usage.
-- CPU hosting if the voice worker is not running on your own machine.
+- transcription tokens/audio
+- `gpt-4o-mini` response generation by default
+- TTS audio output
 
-Vercel can host the Next.js website and API gateway, but it is not the right place for Parakeet and Piper model loading. Run the voice worker as a long-lived process on a VM, container host, or local machine, then set `VOICE_SERVICE_URL`.
+Because speech now runs through OpenAI, Vercel can host the whole website/backend flow as long as the required OpenAI environment variables are set.
 
 ## Embed
 
@@ -62,12 +64,12 @@ Minimum values:
 
 ```bash
 OPENAI_API_KEY=
-OPENAI_MODEL=gpt-5.5-mini
+OPENAI_MODEL=gpt-4o-mini
+OPENAI_TRANSCRIBE_MODEL=gpt-4o-mini-transcribe
+OPENAI_TTS_MODEL=gpt-4o-mini-tts
+OPENAI_TTS_VOICE=coral
+OPENAI_TTS_FORMAT=mp3
 SAARTHI_ALLOWED_ORIGINS=https://your-domain.com
-VOICE_SERVICE_URL=http://127.0.0.1:8010
-VOICE_SERVICE_ASR_TIMEOUT_MS=600000
-VOICE_SERVICE_TTS_TIMEOUT_MS=120000
-VOICE_SERVICE_AUTH_TOKEN=
 ```
 
 The app can also read an OpenAI key from:
@@ -76,44 +78,14 @@ The app can also read an OpenAI key from:
 OPENAI_API_KEY_FILE=/Users/you/Desktop/files/orange/openai_api_key.txt
 ```
 
+For local development, `SAARTHI_ALLOWED_ORIGINS` can be empty.
+
 ## Local Development
 
-Install the website dependencies:
+Install and run:
 
 ```bash
 npm install
-```
-
-Install the voice worker dependencies:
-
-```bash
-python3.11 -m venv .venv-voice
-source .venv-voice/bin/activate
-python -m pip install --upgrade pip
-pip install -r services/voice/requirements.txt
-```
-
-Install `ffmpeg`:
-
-```bash
-brew install ffmpeg
-```
-
-Download the default Piper English voice:
-
-```bash
-python scripts/download-piper-voice.py
-```
-
-Start the voice worker:
-
-```bash
-npm run voice:dev
-```
-
-Start the website in another terminal:
-
-```bash
 npm run dev
 ```
 
@@ -121,40 +93,28 @@ Open:
 
 - website: `http://localhost:3000`
 - embed demo: `http://localhost:3000/embed-test`
-- web health: `http://localhost:3000/api/health`
-- voice worker health: `http://localhost:8010/health`
-
-If the widget says the voice worker is not reachable, `http://localhost:8010/health` is the first thing to check. The Next.js app can be healthy while speech still fails if this worker is not running. The worker preloads Parakeet by default; if `asr.status` is `loading`, the 2.47 GB Parakeet model is still downloading or warming up. Later turns should be much faster after `asr.loaded` becomes `true`.
-
-## Docker Compose
-
-For one-box development:
-
-```bash
-cp .env.example .env.local
-python scripts/download-piper-voice.py
-docker compose up --build
-```
-
-The first Parakeet model load can take time and needs several GB of RAM.
+- health check: `http://localhost:3000/api/health`
 
 ## Deployment
 
-Recommended production shape:
+Recommended Vercel environment:
 
-- Vercel: Next.js site, `/widget.js`, and `/api/voice/turn`.
-- CPU worker: FastAPI service running Parakeet, Piper, and `ffmpeg`.
-- Env on Vercel: `OPENAI_API_KEY`, `OPENAI_MODEL`, `VOICE_SERVICE_URL`, and `VOICE_SERVICE_AUTH_TOKEN` if the worker is remote.
+```bash
+OPENAI_API_KEY=
+OPENAI_MODEL=gpt-4o-mini
+OPENAI_TRANSCRIBE_MODEL=gpt-4o-mini-transcribe
+OPENAI_TTS_MODEL=gpt-4o-mini-tts
+OPENAI_TTS_VOICE=coral
+OPENAI_TTS_FORMAT=mp3
+SAARTHI_ALLOWED_ORIGINS=https://your-domain.com
+```
 
-If the worker is on the same VPS as the website backend, bind it to `127.0.0.1`. If it is remote from Vercel, expose it behind HTTPS and set the same `VOICE_SERVICE_AUTH_TOKEN` on Vercel and the worker.
+No worker URL is needed anymore.
 
 ## API Routes
 
-- `POST /api/voice/turn`: accepts `multipart/form-data` with `audio` and `context`; returns transcript, reply text, and WAV audio as base64.
+- `POST /api/voice/turn`: accepts `multipart/form-data` with `audio` and `context`; returns transcript, reply text, and spoken audio as base64.
 - `GET /api/health`: confirms the Next.js app is alive.
-- `GET /health` on the voice worker: reports ASR/TTS configuration.
-- `POST /asr` on the voice worker: browser audio in, transcript out.
-- `POST /tts` on the voice worker: text in, `audio/wav` out.
 
 ## Privacy
 
@@ -164,7 +124,7 @@ Saarthi does not continuously stream the screen. It records only after the user 
 data-saarthi-private
 ```
 
-Before public production, add site allowlists, signed embed keys, rate limits, and worker authentication so unknown sites cannot use your OpenAI or CPU budget.
+Before public production, add site allowlists, signed embed keys, and rate limits so unknown sites cannot use your OpenAI budget.
 
 ## License
 

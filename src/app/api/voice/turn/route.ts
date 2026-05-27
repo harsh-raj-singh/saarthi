@@ -1,10 +1,11 @@
 import { json, optionsResponse } from "@/lib/cors";
-import { generateVoiceReply, type VoiceTurnContext } from "@/lib/openai";
 import {
-  arrayBufferToBase64,
-  synthesizeWithVoiceService,
-  transcribeWithVoiceService,
-} from "@/lib/voice-service";
+  generateVoiceReply,
+  getDefaultLlmModel,
+  synthesizeSpeechWithOpenAI,
+  transcribeAudioWithOpenAI,
+  type VoiceTurnContext,
+} from "@/lib/openai";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -73,7 +74,7 @@ export async function POST(request: Request) {
       return json({ ok: false, error: "Audio recording is too large." }, { status: 413 });
     }
 
-    const transcript = await transcribeWithVoiceService(audio);
+    const transcript = await transcribeAudioWithOpenAI(audio);
     if (!transcript.text) {
       return json({
         ok: false,
@@ -82,7 +83,7 @@ export async function POST(request: Request) {
     }
 
     const reply = await generateVoiceReply(transcript.text, context);
-    const speech = await synthesizeWithVoiceService(reply);
+    const speech = await synthesizeSpeechWithOpenAI(reply);
 
     return json({
       ok: true,
@@ -90,12 +91,12 @@ export async function POST(request: Request) {
       reply,
       audio: {
         contentType: speech.contentType,
-        base64: arrayBufferToBase64(speech.audio),
+        base64: Buffer.from(speech.audio).toString("base64"),
       },
       models: {
         asr: transcript.model,
         tts: speech.model,
-        llm: process.env.OPENAI_MODEL?.trim() || "gpt-5.5-mini",
+        llm: process.env.OPENAI_MODEL?.trim() || getDefaultLlmModel(),
       },
     });
   } catch (error) {

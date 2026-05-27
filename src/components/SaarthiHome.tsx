@@ -7,7 +7,6 @@ import {
   Code2,
   Compass,
   Copy,
-  Cpu,
   Globe2,
   Mic2,
   MousePointer2,
@@ -21,9 +20,9 @@ import { useEffect, useMemo, useState } from "react";
 
 const flow = [
   { label: "Widget mic", detail: "Records a short browser voice turn.", icon: Mic2, tone: "text-emerald-700" },
-  { label: "Parakeet ASR", detail: "CPU worker transcribes the audio.", icon: Waves, tone: "text-cyan-700" },
+  { label: "OpenAI ASR", detail: "Transcribes English, Hindi, or Hinglish.", icon: Waves, tone: "text-cyan-700" },
   { label: "OpenAI mini", detail: "The backend reasons over page context.", icon: Brain, tone: "text-violet-700" },
-  { label: "Piper TTS", detail: "The answer comes back as local speech.", icon: Volume2, tone: "text-rose-700" },
+  { label: "OpenAI TTS", detail: "Speaks the answer back naturally.", icon: Volume2, tone: "text-rose-700" },
 ];
 
 const sampleExplanations = [
@@ -140,7 +139,7 @@ export function SaarthiHome() {
             <div className="mt-8 grid max-w-xl grid-cols-3 gap-3">
               {[
                 ["0", "call providers"],
-                ["CPU", "speech worker"],
+                ["2", "languages"],
                 ["1", "script tag"],
               ].map(([value, label]) => (
                 <div
@@ -290,7 +289,7 @@ export function SaarthiHome() {
       <section id="flow" className="mx-auto grid w-full max-w-7xl gap-6 px-5 py-16 sm:px-8 lg:grid-cols-4">
         {[
           [Mic2, "In-page voice", "The user presses the floating mic and speaks directly inside the website."],
-          [Cpu, "Open speech", "Parakeet handles English ASR and Piper generates the reply on a CPU worker."],
+          [Waves, "OpenAI speech", "OpenAI handles transcription and spoken audio, so there is no local model warmup."],
           [Brain, "Plain guidance", "OpenAI uses the transcript plus safe page context to explain or verbally navigate."],
           [Globe2, "Reusable embed", "The public widget is isolated in Shadow DOM and works from one script tag."],
         ].map(([Icon, title, body]) => (
@@ -309,20 +308,19 @@ export function SaarthiHome() {
               <ShieldCheck size={17} aria-hidden="true" />
               Simple production shape
             </div>
-            <h2 className="mt-5 text-4xl font-black leading-tight">Website backend plus one voice worker.</h2>
+            <h2 className="mt-5 text-4xl font-black leading-tight">One website backend. No voice worker.</h2>
             <p className="mt-4 text-base leading-7 text-[#586476]">
-              The Next.js app serves the website, widget, and OpenAI request. A separate
-              long-lived worker runs Parakeet and Piper on CPU. Vercel can host the web
-              app, but the speech worker should live on a VM, container host, or your own
-              machine while developing.
+              The Next.js app serves the website, widget, and the complete OpenAI voice
+              request. Transcription, reasoning, and speech all run through the same
+              OpenAI API key, so local model setup disappears.
             </p>
           </div>
 
           <div className="grid gap-3 sm:grid-cols-3">
             {[
               ["No Twilio", "No phone numbers, calls, or telecom compliance for this version."],
-              ["No ElevenLabs", "ASR and TTS are open-source local services."],
-              ["Paid OpenAI", "You only pay OpenAI usage and whatever CPU host you choose."],
+              ["No workers", "No Parakeet, Piper, Python service, model download, or CPU warmup."],
+              ["Paid OpenAI", "You only pay for OpenAI transcription, reasoning, and speech."],
             ].map(([title, body]) => (
               <div key={title} className="rounded-[8px] border border-[#172033]/10 bg-[#f8fafc] p-5">
                 <h3 className="text-base font-black">{title}</h3>

@@ -107,7 +107,7 @@
       '<div class="top"><div class="mark">S</div><div><div class="title">Saarthi</div><div class="sub"><span class="pulse ' +
       (state.recording ? "recording" : "") +
       '"></span>' +
-      (state.recording ? "Listening on this page" : "Local voice guide") +
+      (state.recording ? "Listening on this page" : "OpenAI voice guide") +
       '</div></div><button class="close" type="button" data-action="close" aria-label="Close Saarthi">x</button></div>' +
       '<div class="body">' +
       '<button class="mic ' +
