@@ -42,9 +42,26 @@ Add this before `</body>`:
 <script
   src="https://your-domain.com/widget.js"
   data-site-id="your_site_id"
+  data-theme="auto"
   async
 ></script>
 ```
+
+Optional brand configuration:
+
+```html
+<script>
+  window.SaarthiConfig = {
+    color: "#6366f1",
+    theme: "auto",
+    lang: ["hi", "en"],
+    position: "bottom-right",
+    greeting: "Need help with this page?"
+  };
+</script>
+```
+
+The same values can be passed as script attributes: `data-color`, `data-theme`, `data-lang`, `data-position`, and `data-greeting`.
 
 For local testing, open `/embed-test`:
 

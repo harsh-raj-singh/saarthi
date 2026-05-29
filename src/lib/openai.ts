@@ -38,6 +38,7 @@ type PageSummary = {
 export type VoiceTurnContext = {
   siteId?: string;
   sessionId?: string;
+  preferredLanguage?: "en" | "hi" | "hinglish" | string;
   capturedAt?: string;
   page?: PageSummary;
   element?: ElementSummary;
@@ -93,8 +94,9 @@ function compactVoiceContext(context: VoiceTurnContext, transcript: string) {
     page: context.page,
     element_under_cursor: context.element,
     visible_controls: context.visibleControls?.slice(0, 24) ?? [],
+    preferred_language: context.preferredLanguage,
     instructions:
-      "Give spoken website guidance for a non-technical user. Support English, Hindi, and natural Hinglish. Reply in the same language or mix of languages the user used. Only explain or verbally navigate. Do not click, fill, submit, purchase, delete, or claim that you changed the page. If the user asks what something is, explain the element under the cursor. If they ask what to do next, use visible controls to describe the next safe visible step. Keep the answer under 70 words.",
+      "Give spoken website guidance for a non-technical user. Support English, Hindi, and natural Hinglish. If preferred_language is set, answer in that language; otherwise reply in the same language or mix of languages the user used. Only explain or verbally navigate. Do not click, fill, submit, purchase, delete, or claim that you changed the page. If the user asks what something is, explain the element under the cursor. If they ask what to do next, use visible controls to describe the next safe visible step. Keep the answer under 70 words.",
   };
 }
 
